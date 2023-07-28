@@ -22,14 +22,21 @@ class QAOAPortfolioOptimization_mixer(QAOAConstrained_design_mixer):
         self.exp_return = params.get("exp_return")
         self.penalty = params.get("penalty", 0.0)
         self.N_assets = len(self.exp_return)
+        self.parameterized = params.get("parameterized")
+
 
         # Reformulated as a QUBO
         # min x^T Q x + c^T x + b
         # Writing Q as lower triangular matrix since it otherwise is symmetric
-        Q = self.risk * np.tril(self.cov_matrix + np.tril(self.cov_matrix, k=-1)) \
-                        + self.penalty*(np.eye(self.N_assets) + 2* np.tril(np.ones((self.N_assets, self.N_assets)), k=-1))
-        c = - self.exp_return - (2*self.penalty*self.budget*np.ones_like(self.exp_return))
-        b = self.penalty*self.budget*self.budget
+        #Q = self.risk * np.tril(self.cov_matrix + np.tril(self.cov_matrix, k=-1)) \
+        #               + self.penalty*(np.eye(self.N_assets) + 2* np.tril(np.ones((self.N_assets, self.N_assets)), k=-1))
+        #c = - self.exp_return - (2*self.penalty*self.budget*np.ones_like(self.exp_return))
+        #b = self.penalty*self.budget*self.budget 
+
+        #penalty term set to 0 for constraint preserving mixer class
+        Q = self.risk * np.tril(self.cov_matrix + np.tril(self.cov_matrix, k=-1)) 
+        c = -self.exp_return
+        b = 0
         self._init_QUBO(Q=Q, c=c, b=b)
 
 

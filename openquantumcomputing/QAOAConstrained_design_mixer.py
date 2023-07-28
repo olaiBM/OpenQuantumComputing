@@ -2,8 +2,14 @@ from qiskit import *
 import numpy as np
 import math
 
+import qiskit.quantum_info as qi
+from qiskit.opflow.primitive_ops import PauliOp
+from qiskit.extensions import HamiltonianGate
+from qiskit.circuit.library import PauliEvolutionGate
+
 
 from qiskit.circuit import Parameter
+from qiskit.quantum_info import Statevector
 #run: pip install openquantumcomputing
 import sys
     # caution: path[0] is reserved for script path (or '' in REPL)
@@ -26,12 +32,14 @@ class QAOAConstrained_design_mixer(QAOABase):
         """
         super(QAOAConstrained_design_mixer, self).__init__(params=params)
 
-        self.parameterized = False
+        self.parameterized = params.get("parameterized")
         self.QUBO_Q = None 
         self.QUBO_c = None 
         self.QUBO_b = None
         self.B = []
         self.best_mixer_terms = []
+        self.mixer_circuit = None
+        self.reduced = True #should be taken in with params
 
         self.lower_triangular_Q = False
 
@@ -64,8 +72,11 @@ class QAOAConstrained_design_mixer(QAOABase):
 
         
     def cost(self, string):
+        #print("standard cost function called")
         x = np.array(list(map(int, string)))
+        #print("Return value: ",  - (x.T@self.QUBO_Q@x + self.QUBO_c.T@x + self.QUBO_b))
         return - (x.T@self.QUBO_Q@x + self.QUBO_c.T@x + self.QUBO_b)
+
 
     def createCircuit(self, angles, depth):
         if self.lower_triangular_Q:
@@ -75,7 +86,7 @@ class QAOAConstrained_design_mixer(QAOABase):
       
 
     def _createCircuitTril(self, angles, depth):
-        
+
         usebarrier = self.params.get('usebarrier', False)
 
         q = QuantumRegister(self.N_assets)
@@ -85,12 +96,14 @@ class QAOAConstrained_design_mixer(QAOABase):
         ### initial state     ++++++What should this be now+++++++????
         #circ.h(range(self.N_assets)) For standard (unconstrained) mixer
         self.setToInitialState(circ, q)
+        self.computeBestMixer()
+        
 
         if usebarrier:
             circ.barrier()
         for d in range(depth):
             gamma = angles[2 * d]
-            beta = angles[2 * d + 1]
+            beta_val = angles[2 * d + 1]
             ### cost Hamiltonian
             for i in range(self.N_assets):
                 w_i = 0.5 * (self.QUBO_c[i] + np.sum(self.QUBO_Q[:, i]))
@@ -110,7 +123,8 @@ class QAOAConstrained_design_mixer(QAOABase):
                     circ.barrier()
             ### mixer Hamiltonian
             #circ.rx(-2 * beta, range(self.N_assets))  Standard mixer
-            self.applyBestMixer(circ, q, beta)   #Adding the best mixer foud by Franz to the circuit circ
+            circ = self.applyBestMixer(circ, beta_val, q)   #Adding the best mixer foud by Franz to the circuit circ
+            #Should a new parametrized ciruit be created for each depth????
             if usebarrier:
                 circ.barrier()
         circ.measure(q, c)
@@ -158,10 +172,28 @@ class QAOAConstrained_design_mixer(QAOABase):
         circ.measure(q, c)
         return circ
     
-    def applyBestMixer(self, circuit, qubit_register, beta):
+    def applyBestMixer(self, circuit, beta_val, q):    
         if not self.best_mixer_terms:
-            self.computeBestMixer()
-        
+            #self.computeBestMixer(beta)
+            #should not go in here
+            raise NotImplementedError
+
+        if self.parameterized:
+            #DOES NOT WORK PROPERLU
+
+            c = circuit.compose(self.mixer_circuit, inplace = False)
+            c_return = c.bind_parameters({c.parameters[0]:beta_val})
+            return c_return
+        else:
+
+            for term in self.best_mixer_terms:
+                circuit.append(PauliEvolutionGate(qi.Pauli(term.P), time = np.real(term.scalar)*beta_val), q)
+            return circuit
+
+
+
+
+        """
         for term in self.best_mixer_terms:
             circuit.barrier()
             indicies_of_X = [i for i in range(len(term)) if term[i] == 'X']
@@ -182,15 +214,29 @@ class QAOAConstrained_design_mixer(QAOABase):
                     circuit.cx(indicies_of_X[i-1], indicies_of_X[i])
                 circuit.h(indicies_of_X)
 
+        """
+
     def computeBestMixer(self):
         if not self.B:
             self.computeFeasibleSubspace()
-        print("Its now computing the best mixer")
-        m = Mixer(self.B, sort = True)
-        m.compute_commuting_pairs()
-        m.compute_family_of_graphs()
-        m.get_best_mixer_commuting_graphs(reduced = False)
-        self.best_mixer_terms = m.solution_Xl
+        if not self.best_mixer_terms and self.parameterized:
+                
+            print("Its now computing the best mixer, parametrized")
+            m = Mixer(self.B, sort = True)
+            m.compute_commuting_pairs()
+            m.compute_family_of_graphs()
+            m.get_best_mixer_commuting_graphs(reduced = self.reduced)
+            self.mixer_circuit, self.best_mixer_terms = m.compute_parametrized_circuit(self.reduced)
+        elif not self.best_mixer_terms and not self.parameterized:
+            print("Its now computing the best mixer, not parametrized")
+            m = Mixer(self.B, sort = True)
+            m.compute_commuting_pairs()
+            m.compute_family_of_graphs()
+            m.get_best_mixer_commuting_graphs(reduced = self.reduced)
+            self.best_mixer_terms = m.compute_mixer_terms(self.reduced)
+        else:
+            pass
+
         
 
 
@@ -205,6 +251,7 @@ class QAOAConstrained_design_mixer(QAOABase):
     
 
     def setToInitialState(self, circuit, quantum_register):
+        #set to ground state of mixer hamilton??
         if not self.B:
             self.computeFeasibleSubspace()
                 # initial state
