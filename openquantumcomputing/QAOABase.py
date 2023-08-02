@@ -1,7 +1,13 @@
+import sys
+    # caution: path[0] is reserved for script path (or '' in REPL)
+sys.path.insert(1, '/Users/olaib/QuantumComputing/OpenQuantumComputing')
+
+
 from qiskit import *
 import numpy as np
 from scipy.optimize import minimize
 import math, time
+
 
 from openquantumcomputing.Statistic import Statistic
 
@@ -32,12 +38,14 @@ class QAOABase:
         self.current_circuit_depth = 0
         self.gamma_params = None
         self.beta_params = None
+        self.ruben = params.get("ruben", False)
+        self.beta_params_per_depth = None
 
         self.g_it=0
         self.g_values={}
         self.g_angles={}
 
-        self.parameterized = False
+        #self.parameterized = False
 
 ################################
 # functions to be implemented:
@@ -51,18 +59,100 @@ class QAOABase:
         :return: a scalar value
         """
         raise NotImplementedError
+    def cost_circuit(self, angles, depth):
+        """
+        Implements the function that returns the cost hamiltonian part of the circuit
 
+        :param angles: (PARAMETER OR VALUE??)
+        :param depth: (current depth NEEDED???)
+        :return: quantum circuit corresponding to the cost hamiltonian
+        """
+        raise NotImplementedError
+
+    def cost_circuit_parameterized(self, angles, depth):
+        """
+        Implements the function that returns the cost hamiltonian part of the PARAMETERIZED circuit
+
+        :param angles: (PARAMETER OR VALUE??)
+        :param depth: (current depth NEEDED???)
+        :return: PARAMETERIZED quantum circuit corresponding to the cost hamiltonian
+        """
+        raise NotImplementedError
+    
+
+    def mixer_circuit(self, angles, depth):
+        """
+        Implements the function that returns the mixer part of the circuit
+
+        :param angles: (PARAMETER OR VALUE??)
+        :param depth: (current depth NEEDED???)
+        :return: quantum circuit corresponding to the mixer
+        """
+        raise NotImplementedError
+
+    def mixer_circuit_parameterized(self, angles, depth):
+        """
+        Implements the function that returns the mixer part of the PARAMETERIZED circuit
+
+        :param angles: (PARAMETER OR VALUE??)
+        :param depth: (current depth NEEDED???)
+        :return: PARAMETERIZED quantum circuit corresponding to the mixer
+        """
+        raise NotImplementedError
+    
+    def setToInitialState(self, q):
+        """
+        Implements the function that sets the circuit in the initial state
+        :param q: The qubit register which is initialized
+
+        """
+        raise NotImplementedError
+    
+    
+
+
+   
+
+################################
+# generic functions
+################################
     def createCircuit(self, angles, depth):
         """
         implements a function to create the circuit
 
         :return: an instance of the qiskti class QuantumCircuit
         """
-        raise NotImplementedError
 
-################################
-# generic functions
-################################
+        if self.use_parameterized_circuit:
+            if self.current_circuit_depth != depth:   #NEED THIS??
+                self.current_circuit_depth = depth    #Needed for mixer_circuit_parameterized and/or cost_circuit_parameterized
+                self.gamma_params = [None]*depth
+                #self.beta_params = [None]*depth
+                self.beta_params = [] #Important to allocate space??
+                q = QuantumRegister(self.N_assets)
+                c = ClassicalRegister(self.N_assets)    #Do this for every depth???
+                self.parameterized_circuit = QuantumCircuit(q, c)
+
+                ### initial state
+                self.setToInitialState(q) #Do this for every depth????
+                for d in range(depth):
+                    self.cost_circuit_parameterized(d, q)
+                    self.mixer_circuit_parameterized(d, q)
+
+                self.parameterized_circuit.measure(q, c)
+                
+            return self._applyParameters(angles, depth)
+            
+        else:              
+            #Not parameterized 
+            raise NotImplementedError
+            cost_circuit = self.cost_circuit(angles, depth)
+            mixer_circuit = self.mixer_circuit(angles, depth)
+            composed_circuit = cost_circuit.compose(mixer_circuit, inplace = False)
+            return composed_circuit
+
+
+
 
     def isFeasible(self, string):
         """
@@ -110,13 +200,25 @@ class QAOABase:
         :asList: Boolean that specify if the values in the dict should be a list or not
         :return: A dict containing parameters as keys and parameter values as values
         """
-        assert(len(angles) == 2*depth) 
+        if self.ruben:
+            #Now we use the more mixer parameters per depth
+            num_mixer_parames = self.logical_X_operators*depth
+            num_phase_params = depth
+            assert(len(angles) == num_mixer_parames + num_phase_params)
+        
+        else:
+            #If we only use two parameters per depth
+            assert(len(angles) == 2*depth) 
         
         params = {}
+        #PROBLEMS HERE!!
         for d in range(depth):
             if asList:
                 params[self.gamma_params[d]] = [angles[2*d + 0]]
-                params[self.beta_params[d]]  = [angles[2*d + 1]]
+                
+                #params[self.beta_params[d]]  = [angles[2*d + 1]]
+                for p in range(self.beta_params_per_depth):
+                    params[self.beta_params[d*self.current_circuit_depth + p]] = [angles[2*d +(p+1)]]
             else:
                 params[self.gamma_params[d]] = angles[2*d + 0]
                 params[self.beta_params[d]]  = angles[2*d + 1]

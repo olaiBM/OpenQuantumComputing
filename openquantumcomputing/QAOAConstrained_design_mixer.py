@@ -4,6 +4,7 @@ import math
 
 import qiskit.quantum_info as qi
 from qiskit.circuit.library import PauliEvolutionGate
+from qiskit.visualization import *
 
 
 from qiskit.circuit import Parameter
@@ -33,8 +34,9 @@ class QAOAConstrained_design_mixer(QAOABase):
         self.QUBO_c = None 
         self.QUBO_b = None
         self.B = []
-        self.best_mixer_terms = []
+        self.best_mixer_terms = {}
         self.mixer_circuit = None
+        self.logical_X_operators = []
         self.reduced = True #should be taken in with params
 
         self.lower_triangular_Q = False
@@ -72,8 +74,45 @@ class QAOAConstrained_design_mixer(QAOABase):
         x = np.array(list(map(int, string)))
         #print("Return value: ",  - (x.T@self.QUBO_Q@x + self.QUBO_c.T@x + self.QUBO_b))
         return - (x.T@self.QUBO_Q@x + self.QUBO_c.T@x + self.QUBO_b)
+    
+
+    def cost_circuit_parameterized(self,d, q):
+        if self.lower_triangular_Q:
+            self._createParameterizedCostCircuitTril(d, q)
+        else:
+            #Not lower triangular Q matrix
+            raise NotImplementedError
+
+    def mixer_circuit_parameterized(self, d, q):    
+
+        #Use q to apply mixer at some qubits but not all
+        if not self.best_mixer_terms:
+            self.computeBestMixer()
+        if self.ruben:
+            #CREATE MANY NEW PARAMETERS PER DEPT (IDEALLY USE SAME AS FROM MIXER CLASS)
+            self.beta_params_per_depth = len(self.logical_X_operators)
+            for i in range(len(self.logical_X_operators)):
+                self.beta_params[d*self.current_circuit_depth + i] = Parameter('beta_' + str(d) + str(i))
+                self.mixer_circuit.assign_parameters({self.mixer_circuit.parameters[i]: self.beta_params[d*self.current_circuit_depth + i]}, inplace = True) #Changes the parameters, this is stupid
+            self.parameterized_circuit_compose(self.mixer_circuit, inplace = True)
+    
+        else:
+            self.beta_params[d]  = Parameter('beta_' + str(d))
+            c = self.mixer_circuit.assign_parameters({self.mixer_circuit.parameters[0]: self.beta_params[d]}, inplace = False) #Changes the parameters, this is stupid
+            self.parameterized_circuit.compose(c, inplace = True)
+
+        usebarrier = self.params.get('usebarrier', False)
+        if usebarrier:
+            self.parameterized_circuit.barrier()
 
 
+
+
+
+
+
+
+    """
     def createCircuit(self, angles, depth):
         if self.lower_triangular_Q:
             if self.use_parameterized_circuit:
@@ -86,7 +125,7 @@ class QAOAConstrained_design_mixer(QAOABase):
             if self.use_parameterized_circuit:
                 raise NotImplementedError
             return self._createCircuitFull(angles, depth)
-      
+    """
       
 
     def _createCircuitTril(self, angles, depth):
@@ -135,54 +174,38 @@ class QAOAConstrained_design_mixer(QAOABase):
         return circ
     
 
-    def _createParameterizedCircuitTril(self, depth):
+    def _createParameterizedCostCircuitTril(self, d, q):
         """
         Creates a parameterized circuit of the triangularized QUBO problem.
         """
-        self.gamma_params = [None]*depth
-        self.beta_params = [None]*depth
-        for d in range(depth):
-            self.gamma_params[d] = Parameter('gamma_'+ str(d))
-            self.beta_params[d]  = Parameter('beta_' + str(d))
 
+        self.gamma_params[d] = Parameter('gamma_'+ str(d))
         usebarrier = self.params.get('usebarrier', False)
-
-        q = QuantumRegister(self.N_assets)
-        c = ClassicalRegister(self.N_assets)
-        self.parameterized_circuit = QuantumCircuit(q, c)
-
-        ### initial state
-        self.setToInitialState(self.parameterized_circuit, q)
-
-        self.computeBestMixer()
-        #self.num_created_circuits[depth-1] += 1
         if usebarrier:
             self.parameterized_circuit.barrier()
-        for d in range(depth):
-            ### cost Hamiltonian
-            for i in range(self.N_assets):
-                w_i = 0.5 * (self.QUBO_c[i] + np.sum(self.QUBO_Q[:, i]))
-                
 
-                if not math.isclose(w_i, 0,abs_tol=1e-7):
-                    self.parameterized_circuit.rz( self.gamma_params[d] * w_i, q[i])
+        ### cost Hamiltonian
+        for i in range(self.N_assets):
+            w_i = 0.5 * (self.QUBO_c[i] + np.sum(self.QUBO_Q[:, i]))
+            
 
-                for j in range(i+1, self.N_assets):
-                    w_ij = 0.25*self.QUBO_Q[j][i]
+            if not math.isclose(w_i, 0,abs_tol=1e-7):
+                self.parameterized_circuit.rz( self.gamma_params[d] * w_i, q[i])
 
-                    if not math.isclose(w_ij, 0,abs_tol=1e-7):
-                        self.parameterized_circuit.cx(q[i], q[j])
-                        self.parameterized_circuit.rz(self.gamma_params[d] * w_ij, q[j])
-                        self.parameterized_circuit.cx(q[i], q[j])
-                if usebarrier:
-                    self.parameterized_circuit.barrier()
-            ### mixer Hamiltonian
+            for j in range(i+1, self.N_assets):
+                w_ij = 0.25*self.QUBO_Q[j][i]
 
-            self.parameterized_circuit = self.applyBestMixer(self.parameterized_circuit, self.beta_params[d], q)
+                if not math.isclose(w_ij, 0,abs_tol=1e-7):
+                    self.parameterized_circuit.cx(q[i], q[j])
+                    self.parameterized_circuit.rz(self.gamma_params[d] * w_ij, q[j])
+                    self.parameterized_circuit.cx(q[i], q[j])
             if usebarrier:
                 self.parameterized_circuit.barrier()
-        self.parameterized_circuit.measure(q, c)
-        self.current_circuit_depth = depth
+        ### mixer Hamiltonian
+
+            #self.parameterized_circuit = self.applyBestMixer(self.parameterized_circuit, self.beta_params[d], q)
+            if usebarrier:
+                self.parameterized_circuit.barrier()
 
 
 
@@ -228,25 +251,7 @@ class QAOAConstrained_design_mixer(QAOABase):
         circ.measure(q, c)
         return circ
     
-    def applyBestMixer(self, circuit, beta, q):    
-        if not self.best_mixer_terms:
-            #self.computeBestMixer(beta)
-            #should not go in here
-            raise NotImplementedError
-
-        if self.use_parameterized_circuit:
-            # beta is a parameter
-            c = self.mixer_circuit.assign_parameters({self.mixer_circuit.parameters[0]: beta}, inplace = False)
-            c_return = circuit.compose(c, inplace = False)
-            return c_return
-        else:
-            #beta is a float
-
-            for term in self.best_mixer_terms:
-                circuit.append(PauliEvolutionGate(qi.Pauli(term.P), time = np.real(term.scalar)*beta), q)
-            return circuit
-
-
+   
 
 
         """
@@ -282,7 +287,7 @@ class QAOAConstrained_design_mixer(QAOABase):
             m.compute_commuting_pairs()
             m.compute_family_of_graphs()
             m.get_best_mixer_commuting_graphs(reduced = self.reduced)
-            self.mixer_circuit, self.best_mixer_terms = m.compute_parametrized_circuit(self.reduced)
+            self.mixer_circuit, self.best_mixer_terms, self.logical_X_operators = m.compute_parametrized_circuit(self.reduced, self.ruben)
         elif not self.best_mixer_terms and not self.use_parameterized_circuit:
             print("Its now computing the best mixer, not parametrized")
             m = Mixer(self.B, sort = True)
@@ -306,7 +311,7 @@ class QAOAConstrained_design_mixer(QAOABase):
         raise NotImplementedError
     
 
-    def setToInitialState(self, circuit, quantum_register):
+    def setToInitialState(self, quantum_register):
         #set to ground state of mixer hamilton??
         if not self.B:
             self.computeFeasibleSubspace()
@@ -316,4 +321,9 @@ class QAOAConstrained_design_mixer(QAOABase):
         for state in self.B:
             ampl_vec[int(state, 2)] = ampl
         
-        circuit.initialize(ampl_vec, quantum_register)
+        self.parameterized_circuit.initialize(ampl_vec, quantum_register)
+        print_statevector = self.params.get("print_statevetor", True)
+        if print_statevector:
+            print("Printing initial state: \n")
+            s = Statevector(self.parameterized_circuit)
+            display(s.draw(output = 'latex'))
