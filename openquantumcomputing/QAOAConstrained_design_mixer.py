@@ -90,11 +90,11 @@ class QAOAConstrained_design_mixer(QAOABase):
             self.computeBestMixer()
         if self.ruben:
             #CREATE MANY NEW PARAMETERS PER DEPT (IDEALLY USE SAME AS FROM MIXER CLASS)
-            self.beta_params_per_depth = len(self.logical_X_operators)
-            for i in range(len(self.logical_X_operators)):
-                self.beta_params[d*self.current_circuit_depth + i] = Parameter('beta_' + str(d) + str(i))
-                self.mixer_circuit.assign_parameters({self.mixer_circuit.parameters[i]: self.beta_params[d*self.current_circuit_depth + i]}, inplace = True) #Changes the parameters, this is stupid
-            self.parameterized_circuit_compose(self.mixer_circuit, inplace = True)
+            for i in range(self.N_beta):
+                self.beta_params[d][i] = Parameter('beta_' + str(d) + str(i))
+               
+                self.mixer_circuit.assign_parameters({self.mixer_circuit.parameters[i]: self.beta_params[d][i]}, inplace = True) #Changes the parameters, this is stupid
+            self.parameterized_circuit.compose(self.mixer_circuit, inplace = True)
     
         else:
             self.beta_params[d]  = Parameter('beta_' + str(d))
@@ -281,13 +281,17 @@ class QAOAConstrained_design_mixer(QAOABase):
         if not self.B:
             self.computeFeasibleSubspace()
         if not self.best_mixer_terms and self.use_parameterized_circuit:
-                
-            print("Its now computing the best mixer, parametrized by Havard")
+
             m = Mixer(self.B, sort = True)
             m.compute_commuting_pairs()
             m.compute_family_of_graphs()
             m.get_best_mixer_commuting_graphs(reduced = self.reduced)
             self.mixer_circuit, self.best_mixer_terms, self.logical_X_operators = m.compute_parametrized_circuit(self.reduced, self.ruben)
+            if self.ruben:
+                self.N_beta = len(self.best_mixer_terms) #should be equal to len(self.logical_X_operators) but a logical X appears twice in this array
+                print("SELFNBETA:  ", self.N_beta)
+            else:
+                self.N_beta = 1 #weird way to do it
         elif not self.best_mixer_terms and not self.use_parameterized_circuit:
             print("Its now computing the best mixer, not parametrized")
             m = Mixer(self.B, sort = True)

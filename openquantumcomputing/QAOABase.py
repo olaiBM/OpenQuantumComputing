@@ -39,7 +39,9 @@ class QAOABase:
         self.gamma_params = None
         self.beta_params = None
         self.ruben = params.get("ruben", False)
-        self.beta_params_per_depth = None
+        self.hot_start = params.get("hotstart", False) #Good start for initial parameters?
+        self.randomize_init = params.get("randomize_init", False)
+        self.N_beta = None #Number of beta parameteres
 
         self.g_it=0
         self.g_values={}
@@ -107,6 +109,9 @@ class QAOABase:
 
         """
         raise NotImplementedError
+    def computeBestMixer(self):
+
+        raise NotImplementedError
     
     
 
@@ -116,19 +121,23 @@ class QAOABase:
 ################################
 # generic functions
 ################################
-    def createCircuit(self, angles, depth):
+    def createCircuit(self, angles, depth, draw_only = False):
         """
         implements a function to create the circuit
 
         :return: an instance of the qiskti class QuantumCircuit
         """
-
+        if not self.N_beta:
+            #Need self.N_beta to allocate space
+            self.computeBestMixer()
+        if draw_only:
+            return 0
         if self.use_parameterized_circuit:
             if self.current_circuit_depth != depth:   #NEED THIS??
                 self.current_circuit_depth = depth    #Needed for mixer_circuit_parameterized and/or cost_circuit_parameterized
-                self.gamma_params = [None]*depth
+                self.gamma_params = [None]*depth      #For ruben method we need nothing
                 #self.beta_params = [None]*depth
-                self.beta_params = [] #Important to allocate space??
+                self.beta_params = [[None for _ in range(self.N_beta)] for _ in range(depth)] #Important to allocate space??
                 q = QuantumRegister(self.N_assets)
                 c = ClassicalRegister(self.N_assets)    #Do this for every depth???
                 self.parameterized_circuit = QuantumCircuit(q, c)
@@ -202,26 +211,26 @@ class QAOABase:
         """
         if self.ruben:
             #Now we use the more mixer parameters per depth
-            num_mixer_parames = self.logical_X_operators*depth
+            num_mixer_params = self.N_beta*depth
             num_phase_params = depth
-            assert(len(angles) == num_mixer_parames + num_phase_params)
+            assert(len(angles) == num_mixer_params + num_phase_params)
         
         else:
             #If we only use two parameters per depth
             assert(len(angles) == 2*depth) 
         
         params = {}
-        #PROBLEMS HERE!!
+        #PROBLEMS HERE, angles needs changing
         for d in range(depth):
             if asList:
-                params[self.gamma_params[d]] = [angles[2*d + 0]]
+                params[self.gamma_params[d]] = [angles[(1+self.N_beta)*d + 0]] #make angles into a 2D array?
                 
-                #params[self.beta_params[d]]  = [angles[2*d + 1]]
-                for p in range(self.beta_params_per_depth):
-                    params[self.beta_params[d*self.current_circuit_depth + p]] = [angles[2*d +(p+1)]]
+                for p in range(self.N_beta):
+                    params[self.beta_params[d][p]] = [angles[(1+self.N_beta)*d +(p+1)]]
             else:
-                params[self.gamma_params[d]] = angles[2*d + 0]
-                params[self.beta_params[d]]  = angles[2*d + 1]
+                params[self.gamma_params[d]] = angles[(1+self.N_beta)*d + 0]
+                for p in range(self.N_beta):
+                    params[self.beta_params[d][p]]  = angles[(1+self.N_beta)*d + (p+1)]
         return params
     
     def _applyParameters(self, angles, depth):
@@ -243,7 +252,7 @@ class QAOABase:
         n_target=shots
         self.stat.reset()
         shots_taken=0
-
+        #WHAT IS VALUE 3 IN FOR LOOP??
         for i in range(3):
             if backend.configuration().local:
                 if self.use_parameterized_circuit:
@@ -306,7 +315,8 @@ class QAOABase:
             return self.stat.get_CVaR(), self.stat.get_Variance()
 
     def hist(self, angles, backend, shots, noisemodel=None):
-        depth=int(len(angles)/2)
+        #depth=int(len(angles)/2)   #NEED THIS to change
+        depth = int(len(angles)/(1+self.N_beta))
         circ=self.createCircuit(angles, depth)
         if backend.configuration().local:
             job = execute(circ, backend, shots=shots)
@@ -327,6 +337,23 @@ class QAOABase:
         initial[0::2] = gamma_list
         initial[1::2] = beta_list
         return initial
+    
+    def initialize_angles(self, low_bound = 0, high_bound = 2*np.pi):
+        if self.hot_start:
+            raise NotImplementedError
+        else:
+            if self.randomize_init:
+                gamma_val = [np.random.uniform(low_bound, high_bound)]
+                print("self.N_beta: ", self.N_beta)
+                beta_vals = [0]*self.N_beta
+                for i in range(self.N_beta):
+                    beta_vals[i] = np.random.uniform(low_bound, high_bound)
+                angles0 = np.array(gamma_val + beta_vals)
+            else:
+                angles0 = np.zeros(1 + self.N_beta)
+        return angles0
+
+
 
 
     def interp(self, angles):
@@ -339,6 +366,7 @@ class QAOABase:
         :return: linear interpolation of angles for depth p+1
         """
         depth=len(angles)
+
         tmp=np.zeros(len(angles)+2)
         tmp[1:-1]=angles.copy()
         w=np.arange(0,depth+1)
@@ -347,12 +375,14 @@ class QAOABase:
     def sample_cost_landscape(self, backend, shots=1024, noisemodel=None, verbose=True, angles={"gamma": [0,2*np.pi,20], "beta": [0,2*np.pi,20]}):
         if verbose:
             print("Calculating Energy landscape for depth p=1...")
-
+        if self.ruben:
+            #Cannot calculate cost landscape with ruben method
+            raise NotImplementedError
         depth=1
 
         tmp=angles["gamma"]
         self.gamma_grid = np.linspace(tmp[0],tmp[1],tmp[2])
-        tmp=angles["beta"]
+        tmp=angles["beta"]                       
         self.beta_grid = np.linspace(tmp[0],tmp[1],tmp[2])
 
         if backend.configuration().local:
@@ -423,7 +453,7 @@ class QAOABase:
         :param angles0: initial guess
         """
 
-        depth=int(len(angles0)/2)
+        depth=int(len(angles0)/(1+self.N_beta))
 
         self.num_shots['d'+str(self.current_depth+1)]=0
         res = minimize(self.loss, x0 = angles0, method = method,
@@ -443,19 +473,30 @@ class QAOABase:
         t_start = time.time()
         if self.current_depth == 0:
             if self.E is None:
-                self.sample_cost_landscape(backend, shots, noisemodel=noisemodel, angles={"gamma": [0,2*np.pi,20], "beta": [0,2*np.pi,20]})
-            ind_Emin = np.unravel_index(np.argmin(self.E, axis=None), self.E.shape)
-            angles0=np.array((self.gamma_grid[ind_Emin[1]], self.beta_grid[ind_Emin[0]]))
+                if self.ruben:
+                    print("HELLO")
+                    angles0 = self.initialize_angles()
+                else:
+                    self.sample_cost_landscape(backend, shots, noisemodel=noisemodel, angles={"gamma": [0,2*np.pi,20], "beta": [0,2*np.pi,20]})
+                    ind_Emin = np.unravel_index(np.argmin(self.E, axis=None), self.E.shape)
+                    angles0=np.array((self.gamma_grid[ind_Emin[1]], self.beta_grid[ind_Emin[0]]))
             self.angles_hist['d1_initial']=angles0
         else:
-            gamma=self.angles_hist['d'+str(self.current_depth)+'_final'][::2]
-            beta=self.angles_hist['d'+str(self.current_depth)+'_final'][1::2]
+            angles0=np.zeros((1+self.N_beta)*(self.current_depth+1)) #new array of "initial angles"
+
+            gamma=self.angles_hist['d'+str(self.current_depth)+'_final'][::(1 + self.N_beta)] #picks out the values for gamma 
             gamma_interp=self.interp(gamma)
-            beta_interp=self.interp(beta)
-            angles0=np.zeros(2*(self.current_depth+1))
-            angles0[::2]=gamma_interp
-            angles0[1::2]=beta_interp
-            self.angles_hist['d'+str(self.current_depth+1)+'_initial']=angles0
+            angles0[::(1+self.N_beta)]=gamma_interp
+
+            betas = [None]*self.N_beta
+            betas_interp = [None]*self.N_beta
+
+            for p in range(self.N_beta):
+                betas[p]=self.angles_hist['d'+str(self.current_depth)+'_final'][(p+1)::(1+self.N_beta)] #picks out the values for the betas
+                betas_interp[p]=self.interp(betas[p])
+                angles0[(p+1)::(1+self.N_beta)]=betas_interp[p]
+
+            self.angles_hist['d'+str(self.current_depth+1)+'_initial']=angles0 #NEW ARRAY LONGER THAN FOR PREVIOUS DEPTHS?? ALSO, RIGHT STRUCTURES WITH ANGLES??
 
         self.g_it=0
         self.g_values={}
@@ -463,7 +504,7 @@ class QAOABase:
 
         if self.use_parameterized_circuit:
             # Make sure that we have created a parameterized circuit before calling local_opt
-            self.createCircuit(angles0, int(len(angles0)/2))
+            self.createCircuit(angles0, int(len(angles0)/(1 + self.N_beta)))   #IS THIS CORRECT DEPTH???
 
         res = self.local_opt(angles0, backend, shots, precision, noisemodel=noisemodel, method=method)
         if not res.success:
