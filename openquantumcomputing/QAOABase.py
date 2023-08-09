@@ -39,6 +39,12 @@ class QAOABase:
 
         self.parameterized = False
 
+        self.ruben = self.params.get("ruben", False)
+        self.hot_start = params.get("hotstart", False)              #Good start for initial parameters?
+        self.randomize_init = params.get("randomize_init", False)
+        self.N_betas = 1                                            #Default values are 1 mixer (beta) parameter per depth
+        self.N_gammas = 1                                           #Default values are 1 phase (gamma) parameter per depth
+
 ################################
 # functions to be implemented:
 ################################
@@ -110,8 +116,9 @@ class QAOABase:
             ### Initial state
             self.setToInitialState(q)    
 
-            for d in range(depth):               
-                self.create_cost_circuit(d, q) #abstract function, adds qiskit parameters to self.parameterized_circuit and self.gamma_params
+            for d in range(depth):
+                if not self.ruben:               
+                    self.create_cost_circuit(d, q) #abstract function, adds qiskit parameters to self.parameterized_circuit and self.gamma_params
                 self.create_mixer_circuit(d, q) #abstract function, adds qiskit parameters to self.parameterized_circuit and self.beta_params
                 
             self.parameterized_circuit.measure(q, c)
@@ -132,7 +139,8 @@ class QAOABase:
         """
         success is defined through cost function to be equal to 0
         """
-        depth=int(len(angles)/2)
+        #depth=int(len(angles)/2)
+        depth = int(len(angles)/(self.N_betas + self.N_gammas))
         params = self.getParametersToBind(angles, depth,asList=True)            
         if backend.configuration().local:
             job = execute(self.parameterized_circuit, backend, shots=shots, parameter_binds=[params])
@@ -168,16 +176,29 @@ class QAOABase:
         :asList: Boolean that specify if the values in the dict should be a list or not
         :return: A dict containing parameters as keys and parameter values as values
         """
-        assert(len(angles) == 2*depth) 
+        #assert(len(angles) == 2*depth) 
+        #print("angles: ", angles)
+        #print("N_betas: ", self.N_betas, "depth", depth)
+        assert(len(angles) == (self.N_gammas + self.N_betas)*depth) 
+        
         
         params = {}
         for d in range(depth):
             if asList:
-                params[self.gamma_params[d]] = [angles[2*d + 0]]
-                params[self.beta_params[d]]  = [angles[2*d + 1]]
+                if not self.ruben:
+                    params[self.gamma_params[d]] = [angles[2*d + 0]]
+                    params[self.beta_params[d][0]]  = [angles[2*d + 1]]
+                else:
+                    for i in range(self.N_betas):
+                        params[self.beta_params[d][i]] = [angles[self.N_betas*d + i]]
             else:
-                params[self.gamma_params[d]] = angles[2*d + 0]
-                params[self.beta_params[d]]  = angles[2*d + 1]
+                if not self.ruben:
+                    params[self.gamma_params[d]] = angles[2*d + 0]
+                    params[self.beta_params[d][0]]  = angles[2*d + 1]
+                else:
+                    for i in range(self.N_betas):
+                        params[self.beta_params[d][i]] = angles[self.N_betas*d + i]
+
         return params
     
     def _applyParameters(self, angles, depth):
@@ -258,7 +279,7 @@ class QAOABase:
             return self.stat.get_CVaR(), self.stat.get_Variance()
 
     def hist(self, angles, backend, shots, noisemodel=None):
-        depth=int(len(angles)/2)
+        depth=int(len(angles)/(self.N_betas + self.N_gammas))
         
         params = self.getParametersToBind(angles, depth, asList=True)
         if backend.configuration().local:
@@ -280,6 +301,21 @@ class QAOABase:
         initial[0::2] = gamma_list
         initial[1::2] = beta_list
         return initial
+    
+    def initialize_angles(self, low_bound = 0, high_bound = 2*np.pi):
+        if self.hot_start:
+            raise NotImplementedError
+        else:
+            if self.randomize_init:
+                #gamma_val = [np.random.uniform(low_bound, high_bound)]
+                print("self.N_beta: ", self.N_betas)
+                beta_vals = [0]*self.N_betas
+                for i in range(self.N_betas):
+                    beta_vals[i] = np.random.uniform(low_bound, high_bound)
+                angles0 = np.array(beta_vals)
+            else:
+                angles0 = np.zeros(self.N_betas)
+        return angles0
 
 
     def interp(self, angles):
@@ -291,6 +327,7 @@ class QAOABase:
         :param angles: angles for depth p
         :return: linear interpolation of angles for depth p+1
         """
+        
         depth=len(angles)
         tmp=np.zeros(len(angles)+2)
         tmp[1:-1]=angles.copy()
@@ -324,7 +361,7 @@ class QAOABase:
                     counter += 1
             
             parameters = {self.gamma_params[0]: gamma,
-                            self.beta_params[0]: beta}
+                            self.beta_params[0][0]: beta}
                     
             print("Executing sample_cost_landscape")
             print("parameters: ", len(parameters), len(parameters[self.gamma_params[0]]))
@@ -366,7 +403,8 @@ class QAOABase:
         :param angles0: initial guess
         """
 
-        depth=int(len(angles0)/2)
+        #depth=int(len(angles0)/2)
+        depth = int(len(angles0)/(self.N_betas + self.N_gammas))
 
         self.num_shots['d'+str(self.current_depth+1)]=0
         res = minimize(self.loss, x0 = angles0, method = method,
@@ -384,21 +422,34 @@ class QAOABase:
         """
 
         t_start = time.time()
-        if self.current_depth == 0:
-            if self.E is None:
-                self.sample_cost_landscape(backend, shots, noisemodel=noisemodel, angles={"gamma": [0,2*np.pi,20], "beta": [0,2*np.pi,20]})
-            ind_Emin = np.unravel_index(np.argmin(self.E, axis=None), self.E.shape)
-            angles0=np.array((self.gamma_grid[ind_Emin[1]], self.beta_grid[ind_Emin[0]]))
+        if self.current_depth == 0: 
+            if not self.ruben:
+                if self.E is None:
+                    self.sample_cost_landscape(backend, shots, noisemodel=noisemodel, angles={"gamma": [0,2*np.pi,20], "beta": [0,2*np.pi,20]})
+                ind_Emin = np.unravel_index(np.argmin(self.E, axis=None), self.E.shape)
+                angles0=np.array((self.gamma_grid[ind_Emin[1]], self.beta_grid[ind_Emin[0]]))
+            else:
+                print("HEre")
+                angles0 = self.initialize_angles()
+                print("angles0", angles0)
+                #should something be done with self.E and self.V
             self.angles_hist['d1_initial']=angles0
         else:
-            gamma=self.angles_hist['d'+str(self.current_depth)+'_final'][::2]
-            beta=self.angles_hist['d'+str(self.current_depth)+'_final'][1::2]
-            gamma_interp=self.interp(gamma)
-            beta_interp=self.interp(beta)
-            angles0=np.zeros(2*(self.current_depth+1))
-            angles0[::2]=gamma_interp
-            angles0[1::2]=beta_interp
-            self.angles_hist['d'+str(self.current_depth+1)+'_initial']=angles0
+            if not self.ruben:
+                gamma=self.angles_hist['d'+str(self.current_depth)+'_final'][::2]
+                beta=self.angles_hist['d'+str(self.current_depth)+'_final'][1::2]
+                gamma_interp=self.interp(gamma)
+                beta_interp=self.interp(beta)
+                angles0=np.zeros(2*(self.current_depth+1))
+                angles0[::2]=gamma_interp
+                angles0[1::2]=beta_interp
+                self.angles_hist['d'+str(self.current_depth+1)+'_initial']=angles0
+            else:
+                betas=self.angles_hist['d'+str(self.current_depth)+'_final']
+                print("betas: ", betas)
+                angles0=np.array(list(betas) + list(betas[-self.N_betas:]))             #np.zeros((self.N_betas)*(self.current_depth+1))
+                print("after concat: ", angles0)
+                self.angles_hist['d'+str(self.current_depth+1)+'_initial']=angles0
 
         self.g_it=0
         self.g_values={}
@@ -406,7 +457,7 @@ class QAOABase:
 
 
             
-        self.createParameterizedCircuit(int(len(angles0)/2))            # Make sure that we have created a parameterized circuit before calling local_opt
+        self.createParameterizedCircuit(int(len(angles0)/(self.N_betas + self.N_gammas)))            # Make sure that we have created a parameterized circuit before calling local_opt
 
         res = self.local_opt(angles0, backend, shots, precision, noisemodel=noisemodel, method=method)
         if not res.success:
@@ -417,6 +468,7 @@ class QAOABase:
 
         ind = min(self.g_values, key=self.g_values.get)
         self.angles_hist['d'+str(self.current_depth+1)+'_final']=self.g_angles[ind]
+        print("angles hist: ", self.angles_hist['d'+str(self.current_depth+1)+'_final'])
         self.costval['d'+str(self.current_depth+1)+'_final']=self.g_values[ind]
 
 

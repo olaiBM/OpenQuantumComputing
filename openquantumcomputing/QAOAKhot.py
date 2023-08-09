@@ -9,7 +9,7 @@ import itertools
 
 import sys
     # caution: path[0] is reserved for script path (or '' in REPL)
-
+sys.path.insert(1, '/Users/olaib/QuantumComputing/OpenQuantumComputing')
 from openquantumcomputing.QAOAConstrainedQUBO import QAOAConstrainedQUBO
 from openquantumcomputing2.PauliString import PauliString
 
@@ -44,16 +44,25 @@ class QAOAKhot(QAOAConstrainedQUBO):
             c = ClassicalRegister(self.N_qubits)
             self.mixer_circuit = QuantumCircuit(q, c)
             self.best_mixer_terms, self.logical_X_operators = self.__XYMixerTerms()
+            scale = 0.5 #Since every logical X has two stabilizers
+            if not self.ruben:
+                Beta = Parameter('Beta')
+                 
+                for i in range(self.N_qubits-1):
+                    #Hard coded XY mixer
+                    current_gate = XXPlusYYGate(scale*Beta)
+                    self.mixer_circuit.append(current_gate, [i, i+1])
+            else:
+                print("Goes in here correctly")
+                self.N_betas = len(self.logical_X_operators)
+                self.N_gammas = 0
+                for i in range(self.N_qubits -1):
+                    current_parameter = Parameter(f"xxx_{i}")     #Qiskit sorts parameters alphabetically using parameter names, mus
+                    current_gate = XXPlusYYGate(scale*current_parameter)
+                    self.mixer_circuit.append(current_gate, [i, i+1])
 
-            Beta = Parameter('Beta')
-            scale = 0.5 #Since every logical X has two stabilizers 
-            for i in range(self.N_qubits-1):
-                #Hard coded XY mixer
-                current_gate = XXPlusYYGate(scale*Beta)
-                self.mixer_circuit.append(current_gate, [i, i+1])
 
-
-                
+                    
 
 
 

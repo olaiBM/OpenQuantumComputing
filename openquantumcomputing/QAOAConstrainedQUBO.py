@@ -11,7 +11,8 @@ from qiskit.quantum_info import Statevector
 #run: pip install openquantumcomputing
 import sys
     # caution: path[0] is reserved for script path (or '' in REPL)
-
+sys.path.insert(1, '/Users/olaib/QuantumComputing/OpenQuantumComputing')
+sys.path.append('/Users/olaib/QuantumComputing/OpenQuantumComputing_private')
 from openquantumcomputing2.Mixer import *
 from openquantumcomputing.QAOAQUBO import QAOAQUBO
 
@@ -42,10 +43,14 @@ class QAOAConstrainedQUBO(QAOAQUBO):
 
         if not self.best_mixer_terms:
             self.computeBestMixer()
-
-        self.beta_params[d]  = Parameter('beta_' + str(d))
-        c = self.mixer_circuit.assign_parameters({self.mixer_circuit.parameters[0]: self.beta_params[d]}, inplace = False) 
+        #Does not depend on self.ruben??
+        parameter_list = [None]*self.N_betas
+        c = self.mixer_circuit.copy()
+        for i in range(self.N_betas):
+            parameter_list[i] = Parameter('beta_' + str(d) + str(i))
+            c.assign_parameters({c.parameters[i]: parameter_list[i]}, inplace = True) 
         self.parameterized_circuit.compose(c, inplace = True)
+        self.beta_params[d] = parameter_list
 
         usebarrier = self.params.get('usebarrier', False)
         if usebarrier:
