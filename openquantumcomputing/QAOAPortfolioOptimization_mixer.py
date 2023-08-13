@@ -18,6 +18,7 @@ class QAOAPortfolioOptimization_mixer(QAOAKhot):
         self.__checkParams()
         self.risk = params.get("risk")
         self.budget = params.get("budget")
+        self.k = self.budget
         self.cov_matrix = params.get("cov_matrix")
         self.exp_return = params.get("exp_return")
         self.penalty = params.get("penalty", 0.0)

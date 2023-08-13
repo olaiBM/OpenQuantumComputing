@@ -19,6 +19,8 @@ class QAOAKhot(QAOAConstrainedQUBO):
         super().__init__(params=params)
 
         self.k = None #Number of ones in feasible strings. Must be initialized by a child class
+        self.cascade = params.get("cascade", False)
+        self.ring = params.get("ring", False)
  
     
     def __str2np(self, s):
@@ -53,13 +55,44 @@ class QAOAKhot(QAOAConstrainedQUBO):
                     current_gate = XXPlusYYGate(scale*Beta)
                     self.mixer_circuit.append(current_gate, [i, i+1])
             else:
-                print("Goes in here correctly")
-                self.N_betas = len(self.logical_X_operators)
                 self.N_gammas = 0
-                for i in range(self.N_qubits -1):
-                    current_parameter = Parameter(f"xxx_{i}")     #Qiskit sorts parameters alphabetically using parameter names, mus
-                    current_gate = XXPlusYYGate(scale*current_parameter)
-                    self.mixer_circuit.append(current_gate, [i, i+1])
+                if self.ring:
+                    number = self.N_qubits
+                        
+                else:
+                     number = self.N_qubits-1
+
+                self.N_betas = number
+                if self.cascade:
+
+                    for i in range(self.N_qubits -1):
+                        current_parameter = Parameter(f"xxx_{i}")     #Qiskit sorts parameters alphabetically using parameter names, must have suitable name
+                        current_gate = XXPlusYYGate(scale*current_parameter)
+                        self.mixer_circuit.append(current_gate, [i, i+1])
+
+                    if self.ring:
+                        current_parameter = Parameter(f"xxx_{self.N_qubits}")     #Qiskit sorts parameters alphabetically using parameter names, must have suitable name
+                        current_gate = XXPlusYYGate(scale*current_parameter)
+                        self.mixer_circuit.append(current_gate, [0, self.N_qubits -1])
+
+                else:
+
+                    last_1_index = self.k -1                            #index of last one in bit string used as initial state, big endian encoding
+                    print("last one index, big endian: ", last_1_index)
+                    last_1_index = (self.N_qubits -1) - last_1_index    #index of last one in bit string used as initial state, little endian encoding
+                    print("last one index, little endian", last_1_index)
+                    
+                    index_counter = last_1_index
+                    for i in range(number):
+                        current_parameter = Parameter(f"xxx_{i}")     #Qiskit sorts parameters alphabetically using parameter names, must have suitable name
+                        current_gate = XXPlusYYGate(scale*current_parameter)
+                        if (index_counter -1 ) == -1:
+                            self.mixer_circuit.append(current_gate, [0, self.N_qubits -1 ])
+                            index_counter = self.N_qubits -1
+                        else:
+                            self.mixer_circuit.append(current_gate, [index_counter, index_counter-1])
+                            index_counter = index_counter -1
+
 
 
                     
@@ -76,8 +109,9 @@ class QAOAKhot(QAOAConstrainedQUBO):
             self.B.append(''.join(current_state))
 
     def __XYMixerTerms(self):
+        #return ring XY mixer
     
-        logical_X_operators = [None]*(self.N_qubits-1)
+        logical_X_operators = [None]*(self.N_qubits)
         mixer_terms = {}
         scale = 0.5                         #1/size, size of stabilizer space
         for i in range(self.N_qubits -2):
@@ -95,6 +129,19 @@ class QAOAKhot(QAOAConstrainedQUBO):
             YY_operator = "".join(YY_operator)
 
             mixer_terms[logical_X_operator].append(PauliString(scale, YY_operator))
+
+        last_operator = ["I"]*(self.N_qubits-1)
+        last_operator[0] = "X"
+        last_operator[-1] = "X"
+        last_operator = "".join(last_operator)
+
+        last_operatorY = ["I"]*(self.N_qubits-1)
+        last_operatorY[0] = "Y"
+        last_operatorY[-1] = "Y"
+        last_operatorY = "".join(last_operator)
+
+        logical_X_operators[-1] =  last_operator
+        mixer_terms[last_operator] = [PauliString(scale, last_operatorY)]
 
         return mixer_terms, logical_X_operators
 

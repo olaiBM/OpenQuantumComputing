@@ -2,6 +2,7 @@ from qiskit import *
 import numpy as np
 from scipy.optimize import minimize
 import math, time
+from qiskit.quantum_info import Statevector
 
 from openquantumcomputing.Statistic import Statistic
 
@@ -120,7 +121,7 @@ class QAOABase:
                 if not self.ruben:               
                     self.create_cost_circuit(d, q) #abstract function, adds qiskit parameters to self.parameterized_circuit and self.gamma_params
                 self.create_mixer_circuit(d, q) #abstract function, adds qiskit parameters to self.parameterized_circuit and self.beta_params
-                
+
             self.parameterized_circuit.measure(q, c)
             self.current_circuit_depth = depth
         else:
@@ -280,6 +281,8 @@ class QAOABase:
 
     def hist(self, angles, backend, shots, noisemodel=None):
         depth=int(len(angles)/(self.N_betas + self.N_gammas))
+        print(depth)
+        self.createParameterizedCircuit(depth)
         
         params = self.getParametersToBind(angles, depth, asList=True)
         if backend.configuration().local:
@@ -405,6 +408,7 @@ class QAOABase:
 
         #depth=int(len(angles0)/2)
         depth = int(len(angles0)/(self.N_betas + self.N_gammas))
+        bnds = tuple([(0, 2*np.pi)]*(self.N_betas + self.N_gammas))
 
         self.num_shots['d'+str(self.current_depth+1)]=0
         res = minimize(self.loss, x0 = angles0, method = method,
@@ -429,7 +433,6 @@ class QAOABase:
                 ind_Emin = np.unravel_index(np.argmin(self.E, axis=None), self.E.shape)
                 angles0=np.array((self.gamma_grid[ind_Emin[1]], self.beta_grid[ind_Emin[0]]))
             else:
-                print("HEre")
                 angles0 = self.initialize_angles()
                 print("angles0", angles0)
                 #should something be done with self.E and self.V
@@ -447,7 +450,7 @@ class QAOABase:
             else:
                 betas=self.angles_hist['d'+str(self.current_depth)+'_final']
                 print("betas: ", betas)
-                angles0=np.array(list(betas) + list(betas[-self.N_betas:]))             #np.zeros((self.N_betas)*(self.current_depth+1))
+                angles0=np.array(list(betas) + list(betas[-self.N_betas:]))  #+list(np.zeros(len(betas))))    + list(self.initialize_angles()))     
                 print("after concat: ", angles0)
                 self.angles_hist['d'+str(self.current_depth+1)+'_initial']=angles0
 

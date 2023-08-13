@@ -35,6 +35,7 @@ class QAOAConstrainedQUBO(QAOAQUBO):
         self.best_mixer_terms = []
         self.mixer_circuit = None
         self.reduced = params.get("reduced", True)
+        self.initial_state = None
 
 
 
@@ -87,10 +88,20 @@ class QAOAConstrainedQUBO(QAOAQUBO):
         #set to ground state of mixer hamilton??
         if not self.B:
             self.computeFeasibleSubspace()
-                # initial state
-        ampl_vec = np.zeros(2 ** len(self.B[0]))
-        ampl = 1 / np.sqrt(len(self.B))
-        for state in self.B:
-            ampl_vec[int(state, 2)] = ampl
-        
+
+        if self.ruben:
+            self.initial_state = self.B[0]
+            ampl_vec = np.zeros(2 ** len(self.initial_state))
+            ampl = 1
+            ampl_vec[int(self.B[0], 2)] = ampl
+        else:
+                
+
+                    # initial state
+            ampl_vec = np.zeros(2 ** len(self.B[0]))
+            ampl = 1 / np.sqrt(len(self.B))
+            for state in self.B:
+                ampl_vec[int(state, 2)] = ampl
+            
+            
         self.parameterized_circuit.initialize(ampl_vec, quantum_register)
