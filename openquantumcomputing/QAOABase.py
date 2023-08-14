@@ -92,7 +92,7 @@ class QAOABase:
         :param q: The qubit register which is initialized
 
         """
-        raise NotImplementedError
+        self.parameterized_circuit.h(range(self.N_qubits))
 
 
 ################################
